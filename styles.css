@@ -187,4 +187,33 @@ body { overflow-x: hidden; }
     transition-duration: .01ms !important;
   }
 }
+/* EV - phone layout based on the user's reference interface */
+@media (max-width: 900px) {
+  html, body { height: auto !important; min-height: 100%; }
+  body { overflow-x: hidden !important; overflow-y: auto !important; }
+  .app {
+    display: flex !important; flex-direction: column; gap: 12px;
+    width: 100%; max-width: 680px; height: auto !important; min-height: 100svh;
+    margin: 0 auto; padding: max(12px, env(safe-area-inset-top)) 12px max(20px, env(safe-area-inset-bottom));
+  }
+  header { flex: none; min-height: 54px; }
+  .grid { display: flex !important; flex-direction: column; gap: 12px; min-height: 0; }
+  .core { order: 0 !important; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .grid > aside[aria-label="System telemetry"] { order: 1 !important; }
+  .grid > aside[aria-label="Controls"] { order: 2 !important; }
+  .reactor { height: 270px !important; width: 100%; flex: none; }
+  #chat { flex: none; width: 100%; height: 360px !important; min-height: 240px; }
+  .side { display: flex; flex-direction: column; gap: 16px; overflow: visible; padding: 14px; }
+  .btn { min-height: 44px; }
+  .btn.full { width: 100%; min-height: 46px; margin-bottom: 8px; }
+  .row { width: 100%; gap: 7px; }
+  .row input[type="text"] { min-width: 0; min-height: 48px; font-size: 16px; }
+  .row .btn { min-width: 56px; min-height: 48px; padding: 9px; }
+  .info { font-size: 14px; }
+}
+@media (min-width: 901px) {
+  .app { height: 100svh; }
+  .grid { display: grid; grid-template-columns: 250px minmax(0, 1fr) 250px; }
+}
+
 
