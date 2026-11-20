@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <canvas id="bg"></canvas>
@@ -40,7 +40,7 @@
       <div class="reactor"><canvas id="core" aria-hidden="true"></canvas><div id="state">STANDBY</div></div>
       <div id="chat" class="hud" role="log" aria-live="polite"></div>
       <div class="row">
-        <input type="text" id="q" placeholder="Ask EDITH anything..." autocomplete="off" aria-label="Message">
+        <input type="text" id="q" placeholder="Ask EV anything..." autocomplete="off" aria-label="Message">
         <button class="btn" id="mic" aria-label="Voice input">MIC</button>
         <button class="btn" id="send">SEND</button>
       </div>
@@ -84,7 +84,7 @@
    ===================================================== */
 const API_KEY = "";
 const HERO = "Sanjay"; // what EDITH calls you
-const CREATOR = "Sanjay"; // who EDITH says created her
+const CREATOR = "SANJAY"; // who EDITH says created her
 
 const MODEL = "gemini-3.5-flash-lite";
 const REQUEST_TIMEOUT_MS = 90000;
