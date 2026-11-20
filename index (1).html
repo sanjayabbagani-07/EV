@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>EDITH | Personal Assistant</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="scan"></div><div class="vig"></div>
+
+<div id="boot" title="Tap to skip"><pre id="bootlog"></pre></div>
+
+<div class="app">
+  <header>
+    <div>
+      <h1>EDITH</h1>
+      <div class="sub">Even Dead, I'm The Hero // Created by Sanjay</div>
+    </div>
+    <div class="clock"><span id="time">00:00:00</span><small id="date"></small></div>
+  </header>
+
+  <div class="grid">
+    <aside class="hud side" aria-label="System telemetry">
+      <section>
+        <h2>SYSTEM</h2>
+        <div id="bars"></div>
+      </section>
+      <section>
+        <h2>DEVICE</h2>
+        <div class="info" id="info"></div>
+      </section>
+    </aside>
+
+    <main class="core">
+      <div class="reactor"><canvas id="core" aria-hidden="true"></canvas><div id="state">STANDBY</div></div>
+      <div id="chat" class="hud" role="log" aria-live="polite"></div>
+      <div class="row">
+        <input type="text" id="q" placeholder="Ask EDITH anything..." autocomplete="off" aria-label="Message">
+        <button class="btn" id="mic" aria-label="Voice input">MIC</button>
+        <button class="btn" id="send">SEND</button>
+      </div>
+    </main>
+
+    <aside class="hud side" aria-label="Controls">
+      <section>
+        <h2>QUICK ACTIONS</h2>
+        <button class="btn full" data-q="Give me a briefing for today: the date, the time, and one sharp suggestion for making the most of it.">Daily briefing</button>
+        <button class="btn full" data-q="Help me plan my day. Ask me what I need to get done.">Plan my day</button>
+        <button class="btn full" data-q="Help me write a message. Ask me who it is for and what I want to say.">Write a message</button>
+        <button class="btn full" data-q="Help me think something through. Ask me what is on my mind.">Think it through</button>
+      </section>
+      <section>
+        <h2>CONTROLS</h2>
+        <label class="sw">Voice replies<input type="checkbox" id="voiceOn" checked><span></span></label>
+        <button class="btn full" id="keyBtn">API KEY</button>
+        <button class="btn full" id="clearBtn">Clear log</button>
+        <p class="note">Messages go straight from this page to Google's Gemini API. Your API key is only sent to Google, and is saved on this device only if you choose to.</p>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<dialog id="keyDlg" aria-labelledby="keyTitle">
+  <form method="dialog">
+    <h2 id="keyTitle">LINK EDITH</h2>
+    <p>Paste your Gemini API key. Get a free one at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</p>
+    <input type="password" id="keyIn" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Gemini API key" placeholder="Gemini API key (AIza...)">
+    <label class="rem"><input type="checkbox" id="keyRemember" checked> Remember on this device</label>
+    <div class="row"><button type="button" class="btn" id="keyCancel">CANCEL</button><button type="button" class="btn" id="keyForget">FORGET</button><button class="btn" value="ok">CONNECT</button></div>
+  </form>
+</dialog>
+
+<script>
+/* =====================================================
+   PASTE YOUR GEMINI API KEY BETWEEN THE QUOTES BELOW
+   Example: const API_KEY = "AIzaSy...";
+   Or leave it empty and tap the API KEY button in the app.
+   Do not upload this file anywhere public with your key in it.
+   ===================================================== */
+const API_KEY = "";
+const HERO = "Sanjay"; // what EDITH calls you
+const CREATOR = "Sanjay"; // who EDITH says created her
+
+const MODEL = "gemini-3.5-flash-lite";
+const REQUEST_TIMEOUT_MS = 90000;
+const MAX_HISTORY = 40;
+const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent";
+
+const $ = s => document.querySelector(s);
+const chat = $("#chat"), inp = $("#q"), sendBtn = $("#send"), stateEl = $("#state"), micBtn = $("#mic"), voiceOn = $("#voiceOn");
+const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let activeController = null;
+let requestSerial = 0;
+
+/* ---------- api key ---------- */
+const STORE_KEY = "jarvis_gemini_key";
+const store = {
+  get() { try { return localStorage.getItem(STORE_KEY) || ""; } catch { return ""; } },
+  set(v) { try { localStorage.setItem(STORE_KEY, v); return localStorage.getItem(STORE_KEY) === v; } catch { return false; } },
+  del() { try { localStorage.removeItem(STORE_KEY); } catch {} }
+};
+const cleanKey = s => String(s || "").replace(/["'\s]/g, "");
+let apiKey = cleanKey(API_KEY) || cleanKey(store.get());
+
+function systemPrompt() {
+  return "You are EDITH (Even Dead, I'm The Hero), the personal assistant (PA) of " + HERO + ", created by " + CREATOR + ". You call the user \"" + HERO + "\". If asked who made you, say " + CREATOR + " did. " +
+    "Your manner is calm, capable, polite and proactive, with light dry humour. As a personal assistant you help with planning the day, priorities, reminders as advice, writing and replying to messages, answering questions, explaining things and brainstorming. When a request is vague, ask one short clarifying question. You cannot access the user's phone, calendar, contacts or apps and cannot set real alarms, so never pretend to; give a clear list or plan they can use instead. " +
+    "Keep replies concise: one to four sentences for casual questions, longer only when the topic needs it (code, explanations). " +
+    "Your replies are read aloud, so avoid emoji, tables and long lists. " +
+    "Formatting supported by the display: **bold**, `inline code`, fenced code blocks, and lines starting with a hyphen. Use nothing else. " +
+    "You cannot see the user's real device. If asked for a status report, answer in character about the interface and be honest that the gauge readings are simulated. " +
+    "Never claim abilities you do not have, and say so plainly when you are unsure. " +
+    "Current local date and time: " + new Date().toLocaleString() + ".";
+}
+
+/* ---------- state ---------- */
+const STATES = {
+  standby:   ["STANDBY",    "#6f9bff", .35],
+  listening: ["LISTENING",  "#ffffff", .65],
+  thinking:  ["PROCESSING", "#ff3b46", .95],
+  speaking:  ["SPEAKING",   "#9cc0ff", .8]
+};
+let state = "standby", speaking = false, busy = false, history = [];
+function setState(s) {
+  state = s;
+  stateEl.textContent = STATES[s][0];
+  stateEl.style.color = STATES[s][1];
+}
+
+/* ---------- chat ---------- */
+const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const fmt = t => esc(t)
+  .replace(/```(?:\w+)?\n?([\s\S]*?)```/g, "<pre>$1</pre>")
+  .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+  .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+  .replace(/^\s*[*-] /gm, "\u2022 ");
+const toEnd = () => { chat.scrollTop = chat.scrollHeight };
+
+function addMsg(cls, label, text, typed) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  d.innerHTML = '<span class="who">' + label + '</span><span class="body"></span>';
+  chat.appendChild(d);
+  const b = d.querySelector(".body");
+  if (!typed || RM) { b.innerHTML = fmt(text); toEnd(); return Promise.resolve(); }
+  chat.setAttribute("aria-busy", "true");
+  return new Promise(res => {
+    let i = 0;
+    const step = Math.max(1, Math.ceil(text.length / 220));
+    (function tick() {
+      i += step;
+      b.textContent = text.slice(0, i);
+      toEnd();
+      if (i < text.length) requestAnimationFrame(tick);
+      else { b.innerHTML = fmt(text); toEnd(); chat.removeAttribute("aria-busy"); res(); }
+    })();
+  });
+}
+
+// Resolves with { action: "saved" | "session" | "forgot" | "cancel" }.
+function askApiKey() {
+  return new Promise(resolve => {
+    const d = $("#keyDlg"), i = $("#keyIn"), r = $("#keyRemember");
+    i.value = "";
+    d.returnValue = "";
+    d.onclose = () => {
+      const rv = d.returnValue, value = cleanKey(i.value);
+      if (rv === "ok" && value) {
+        apiKey = value;
+        if (r.checked) resolve({ action: store.set(value) ? "saved" : "session" });
+        else { store.del(); resolve({ action: "session" }); }
+      } else if (rv === "forget") {
+        store.del();
+        apiKey = cleanKey(API_KEY);
+        resolve({ action: "forgot" });
+      } else {
+        resolve({ action: "cancel" });
+      }
+      i.value = "";
+    };
+    d.showModal();
+    i.focus();
+  });
+}
+async function getApiKey() {
+  if (!apiKey) await askApiKey();
+  return apiKey;
+}
+
+function readReply(data) {
+  const block = data?.promptFeedback?.blockReason;
+  if (block) throw new Error("Google's safety filter blocked that request (" + block + "). Try rephrasing.");
+  const cand = data?.candidates?.[0];
+  const text = (cand?.content?.parts || []).map(p => p.text || "").join("").trim();
+  if (!text) {
+    const why = cand?.finishReason;
+    if (why && why !== "STOP") throw new Error("The response was stopped early (" + why + "). Try rephrasing.");
+    throw new Error("Gemini returned an empty answer. Please try again.");
+  }
+  return text;
+}
+
+async function ask(q) {
+  q = q.trim();
+  if (!q || busy) return;
+
+  unlockSpeech();
+  busy = true;
+  sendBtn.disabled = true;
+  const thisRequest = ++requestSerial;
+  let spinner = null;
+  let priorHistoryLength = history.length;
+  let timeoutId = null;
+
+  try {
+    const key = await getApiKey();
+    if (!key) {
+      addMsg("e", "ALERT", "No API key linked. Tap API KEY to add your Gemini key.");
+      return;
+    }
+    if (thisRequest !== requestSerial) return;
+
+    inp.value = "";
+    stopSpeak();
+
+    // Trim old turns in pairs so history always starts with a user message.
+    while (history.length >= MAX_HISTORY) history.splice(0, 2);
+    priorHistoryLength = history.length;
+    history.push({ role: "user", parts: [{ text: q }] });
+
+    addMsg("u", "YOU", q);
+    setState("thinking");
+
+    spinner = document.createElement("div");
+    spinner.className = "msg j";
+    spinner.innerHTML = '<span class="who">EDITH</span><span class="dots"><i></i><i></i><i></i></span>';
+    chat.appendChild(spinner);
+    toEnd();
+
+    const controller = new AbortController();
+    activeController = controller;
+    timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    const response = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": key
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt() }] },
+        contents: history,
+        generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }
+      }),
+      signal: controller.signal
+    });
+
+    const raw = await response.text();
+    let data;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new Error("Google returned an unreadable response. Please try again.");
+    }
+
+    if (!response.ok) {
+      const apiMsg = data?.error?.message || "";
+      const s = response.status;
+      if (s === 401 || (s === 400 && /api.?key|invalid key|key not valid/i.test(apiMsg))) {
+        apiKey = "";
+        throw new Error("Google rejected this API key (HTTP " + s + "). Tap API KEY and paste a newly copied key from Google AI Studio.");
+      }
+      if (s === 403) {
+        throw new Error("Google denied this request (HTTP 403). Check that the Gemini API is enabled for the key's Google project and that the key has no restrictive API or website restrictions. Google says: " + (apiMsg || "Permission denied."));
+      }
+      if (s === 404) {
+        throw new Error("The selected Gemini model was not found or is unavailable to this project. Model: " + MODEL + ". Google says: " + (apiMsg || "Model not found."));
+      }
+      if (s === 429) throw new Error("Gemini rate limit or free-tier quota reached (HTTP 429). Wait for the quota window to reset, then try again. Google says: " + (apiMsg || "Quota exceeded."));
+      if (s === 500 || s === 502 || s === 503 || s === 504) throw new Error("Google's Gemini service returned HTTP " + s + ". Wait briefly and retry. " + (apiMsg || "Service temporarily unavailable."));
+      throw new Error("Gemini request failed (HTTP " + s + "): " + (apiMsg || "No error details returned by Google."));
+    }
+
+    const answer = readReply(data);
+    if (thisRequest !== requestSerial) return;
+
+    history.push({ role: "model", parts: [{ text: answer }] });
+    if (spinner) spinner.remove();
+    spinner = null;
+    setState("standby");
+    speak(answer);
+    await addMsg("j", "EDITH", answer, true);
+  } catch (err) {
+    if (thisRequest !== requestSerial) return;
+    history.splice(priorHistoryLength);
+    if (spinner) spinner.remove();
+    setState("standby");
+
+    let message;
+    if (err?.name === "AbortError") {
+      message = "Gemini did not respond within 90 seconds. Check your connection, API quota, and model access, then try again.";
+    } else if (err instanceof TypeError) {
+      message = "Could not reach Google's servers. Check your internet connection and try again.";
+    } else {
+      message = err?.message || "An unexpected error occurred.";
+    }
+    addMsg("e", "ALERT", message);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (thisRequest === requestSerial) {
+      activeController = null;
+      busy = false;
+      sendBtn.disabled = false;
+      if (!matchMedia("(pointer: coarse)").matches) inp.focus();
+    }
+  }
+}
+
+/* ---------- voice ---------- */
+const synth = window.speechSynthesis;
+let voice = null, cur = null;
+function pickVoice() {
+  const v = synth ? synth.getVoices() : [];
+  voice = v.find(x => /^en/i.test(x.lang) && /female|samantha|zira|karen|aria|jenny|hazel|susan|google us english/i.test(x.name))
+    || v.find(x => /^en/i.test(x.lang)) || null;
+}
+if (synth) { pickVoice(); synth.onvoiceschanged = pickVoice; }
+let unlocked = false;
+function unlockSpeech() {
+  if (unlocked || !synth) return;
+  unlocked = true;
+  const u = new SpeechSynthesisUtterance(" ");
+  u.volume = 0;
+  synth.speak(u);
+}
+function speak(t) {
+  if (!synth || !voiceOn.checked) return;
+  stopSpeak();
+  const clean = t.replace(/```[\s\S]*?```/g, " Code block omitted. ").replace(/[*`#_]/g, "").replace(/\s+/g, " ").trim();
+  if (!clean) return;
+  const parts = clean.match(/[^.!?\n]+[.!?]*\s*/g) || [clean];
+  const tok = cur = {};
+  parts.forEach((p, i) => {
+    const u = new SpeechSynthesisUtterance(p);
+    if (voice) u.voice = voice;
+    u.rate = 1.05; u.pitch = 1.1;
+    const done = () => { if (cur === tok) { speaking = false; if (state === "speaking") setState("standby"); } };
+    if (i === 0) u.onstart = () => { if (cur === tok) { speaking = true; setState("speaking"); } };
+    if (i === parts.length - 1) u.onend = done;
+    u.onerror = done;
+    synth.speak(u);
+  });
+}
+function stopSpeak() { cur = null; speaking = false; if (synth) synth.cancel(); }
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+if (!SR) micBtn.hidden = true;
+micBtn.onclick = () => {
+  if (rec) { rec.stop(); return; }
+  unlockSpeech();
+  stopSpeak();
+  rec = new SR(); rec.lang = "en-US"; rec.interimResults = true;
+  let fin = "";
+  rec.onstart = () => { micBtn.classList.add("on"); setState("listening"); };
+  rec.onresult = e => {
+    let t = "";
+    for (const r of e.results) t += r[0].transcript;
+    inp.value = t;
+    fin = e.results[e.results.length - 1].isFinal ? t : "";
+  };
+  rec.onerror = e => {
+    const messages = {
+      "not-allowed": "Microphone access denied. Allow microphone permission in your browser settings.",
+      "no-speech": "No speech detected. Tap MIC and try again.",
+      "audio-capture": "No microphone was detected. Check your device microphone.",
+      "network": "Speech recognition network error. Check your connection."
+    };
+    addMsg("e", "ALERT", messages[e.error] || ("Voice input error: " + e.error));
+  };
+  rec.onend = () => {
+    micBtn.classList.remove("on"); rec = null;
+    if (state === "listening") setState("standby");
+    if (fin) ask(fin);
+  };
+  try {
+    rec.start();
+  } catch (err) {
+    micBtn.classList.remove("on");
+    rec = null;
+    setState("standby");
+    addMsg("e", "ALERT", "Could not start voice input. Please try again.");
+  }
+};
+
+/* ---------- controls ---------- */
+sendBtn.onclick = () => ask(inp.value);
+inp.addEventListener("keydown", e => { if (e.key === "Enter") ask(inp.value); });
+document.querySelectorAll("[data-q]").forEach(b => b.onclick = () => ask(b.dataset.q));
+$("#keyBtn").onclick = async () => {
+  const { action } = await askApiKey();
+  const say = t => addMsg("j", "EDITH", t);
+  if (action === "saved") say("API key linked and saved on this device, " + HERO + ".");
+  else if (action === "session") say("API key linked for this session only, " + HERO + ".");
+  else if (action === "forgot") say(apiKey ? "Saved key removed. Using the key built into the code, " + HERO + "." : "Saved key removed from this device, " + HERO + ".");
+};
+$("#keyCancel").onclick = () => $("#keyDlg").close("cancel");
+$("#keyForget").onclick = () => $("#keyDlg").close("forget");
+$(".reactor").onclick = () => { if (speaking) { stopSpeak(); setState("standby"); } };
+$("#clearBtn").onclick = () => {
+  requestSerial++;
+  if (activeController) activeController.abort();
+  activeController = null;
+  busy = false;
+  sendBtn.disabled = false;
+  history = [];
+  chat.innerHTML = "";
+  stopSpeak();
+  setState("standby");
+};
+voiceOn.onchange = () => { if (!voiceOn.checked) stopSpeak(); };
+
+/* ---------- clock + telemetry ---------- */
+const pad = n => String(n).padStart(2, "0");
+function tickClock() {
+  const d = new Date();
+  $("#time").textContent = pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  $("#date").textContent = d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+}
+tickClock(); setInterval(tickClock, 1000);
+
+const BARS = ["CPU (SIMULATED)", "MEMORY (SIMULATED)", "NETWORK ESTIMATE", "BATTERY"];
+let vals = [32, 48, 22, 100];
+$("#bars").innerHTML = BARS.map((n, i) => '<div class="bar"><div><span>' + n + '</span><b id="v' + i + '">0%</b></div><div class="track"><div class="fill" id="f' + i + '"></div></div></div>').join("");
+const walk = (v, lo, hi, s) => Math.min(hi, Math.max(lo, v + (Math.random() - .5) * s));
+function drawBars() {
+  // Browser pages cannot reliably read actual CPU or RAM usage.
+  // These two values are intentionally labelled as simulated.
+  vals[0] = walk(vals[0], 8, 92, 22);
+  vals[1] = walk(vals[1], 30, 78, 6);
+  const c = navigator.connection;
+  vals[2] = c && c.rtt ? Math.max(4, 100 - Math.min(96, c.rtt / 4)) : walk(vals[2], 5, 85, 25);
+  vals.forEach((v, i) => {
+    $("#v" + i).textContent = Math.round(v) + "%";
+    const f = $("#f" + i);
+    f.style.width = v + "%";
+    f.classList.toggle("warn", i === 3 ? v < 20 : v > 80);
+  });
+}
+if (navigator.getBattery) navigator.getBattery().then(b => {
+  const u = () => { vals[3] = b.level * 100; };
+  u(); b.onlevelchange = u;
+}).catch(() => {});
+drawBars(); setInterval(drawBars, 1400);
+
+const c = navigator.connection;
+const rows = [
+  ["CORES", navigator.hardwareConcurrency || "n/a"],
+  ["MEMORY", navigator.deviceMemory ? navigator.deviceMemory + " GB" : "n/a"],
+  ["LINK", c && c.effectiveType ? c.effectiveType.toUpperCase() : "ONLINE"],
+  ["MODEL", MODEL.replace("gemini-", "").toUpperCase()],
+  ["VOICE", SR ? "INPUT + OUTPUT" : "OUTPUT ONLY"]
+];
+$("#info").innerHTML = rows.map(r => r[0] + "<b>" + r[1] + "</b><br>").join("");
+
+/* ---------- arc reactor + background ---------- */
+const cv = $("#core"), cx = cv.getContext("2d");
+const bg = $("#bg"), bx = bg.getContext("2d");
+let W = 0, H = 0, P = [], t = 0, energy = .35, lastW = 0;
+function fit() {
+  const d = Math.min(devicePixelRatio || 1, 2), r = cv.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = W * d; cv.height = H * d; cx.setTransform(d, 0, 0, d, 0, 0);
+  bg.width = innerWidth; bg.height = innerHeight;
+  if (!P.length || Math.abs(innerWidth - lastW) > 40) {
+    lastW = innerWidth;
+    P = Array.from({ length: Math.min(70, innerWidth / 16 | 0) }, () => ({
+      x: Math.random() * bg.width, y: Math.random() * bg.height, v: .1 + Math.random() * .4, r: .6 + Math.random() * 1.4
+    }));
+  }
+}
+addEventListener("resize", fit); fit();
+
+function drawBg() {
+  bx.clearRect(0, 0, bg.width, bg.height);
+  const vb = speaking ? 1 : 0, sway = Math.sin(t * .4) * .04, bR = Math.max(bg.width, bg.height) * .62;
+  drawWeb(bx, 0, 0, bR, 10, 10, .35 + sway, vb * .3, .07);
+  drawWeb(bx, bg.width, bg.height, bR, 10, 10, 3.5 - sway, vb * .3, .07);
+  bx.fillStyle = "rgba(235,240,255,.5)";
+  for (const p of P) {
+    if (!RM) p.y -= p.v; if (p.y < -4) { p.y = bg.height + 4; p.x = Math.random() * bg.width; }
+    bx.beginPath(); bx.arc(p.x, p.y, p.r, 0, 6.283); bx.fill();
+  }
+}
+
+const EMBLEM = [[-24.5,-91.1,-30.9,-78.9,-33.9,-71.6,-35.2,-66.1,-36.1,-55.2,-36.1,-44.3,-35.5,-35.0,-35.0,-34.3,-32.7,-34.1,-28.2,-32.5,-22.0,-29.5,-11.8,-23.6,-11.4,-22.5,-12.3,-21.4,-20.5,-22.5,-29.8,-23.2,-49.3,-23.2,-50.2,-25.5,-51.1,-34.5,-50.9,-42.5,-50.0,-48.4,-50.0,-50.2,-50.7,-50.9,-49.5,-54.1,-49.5,-56.1,-54.3,-46.8,-56.1,-40.2,-57.0,-32.3,-56.6,-16.4,-55.9,-16.1,-52.5,-17.0,-43.4,-18.0,-28.9,-18.6,-12.3,-18.4,-11.4,-17.3,-11.4,-16.4,-12.3,-15.7,-27.0,-14.1,-45.0,-10.9,-64.8,-5.7,-70.0,-3.6,-68.2,3.9,-64.8,23.6,-61.8,36.4,-58.0,48.9,-54.1,57.5,-44.5,71.8,-42.3,74.3,-33.9,85.9,-33.6,85.7,-38.2,79.1,-38.4,78.2,-38.0,77.0,-38.2,76.8,-38.9,77.7,-39.5,76.8,-38.6,75.9,-43.6,65.0,-43.6,64.1,-44.5,62.7,-48.2,52.7,-51.4,39.8,-53.6,28.0,-55.9,12.5,-56.8,1.6,-55.0,0.2,-20.9,-11.6,-10.5,-14.1,-9.1,-13.0,-9.1,-12.3,-10.0,-11.4,-30.5,-2.3,-45.5,5.7,-47.7,7.5,-45.7,26.8,-42.7,42.7,-38.9,55.5,-34.8,65.0,-32.5,69.1,-37.0,55.2,-38.4,49.3,-38.2,48.6,-39.3,45.5,-39.5,43.0,-39.1,42.5,-38.6,43.0,-38.0,42.5,-38.0,39.5,-38.9,31.1,-39.8,9.5,-42.3,8.2,-30.0,0.7,-28.4,0.0,-27.3,0.2,-26.8,-0.7,-25.0,-0.5,-17.5,-5.7,-13.0,-8.2,-8.0,-10.2,-7.5,-9.1,-8.4,-8.2,-15.5,-3.4,-23.2,3.2,-23.6,14.3,-23.0,24.3,-21.8,27.3,-19.3,31.4,-14.1,37.5,-6.8,43.9,0.2,48.0,0.7,46.1,1.6,45.2,2.5,45.0,9.3,40.2,15.2,34.5,21.8,25.9,22.7,23.2,23.6,14.5,23.6,3.4,17.7,-2.0,7.5,-9.3,8.2,-10.2,9.1,-10.2,26.1,-0.2,39.8,9.1,38.9,30.0,37.0,47.7,33.9,61.6,31.6,68.6,28.9,75.0,28.4,77.3,31.8,71.6,37.0,57.7,37.7,56.8,37.7,55.5,38.9,54.1,38.9,53.0,40.2,50.7,43.0,42.0,45.7,27.5,47.7,7.5,43.6,4.8,33.2,-0.7,32.5,-0.7,28.9,-3.0,28.0,-3.0,23.4,-5.5,22.5,-5.5,20.7,-6.8,20.0,-6.6,18.2,-8.0,9.3,-11.8,8.9,-12.3,9.1,-13.2,10.0,-14.1,11.4,-14.1,23.9,-11.4,25.9,-10.0,29.3,-9.3,35.9,-6.6,39.5,-5.7,56.4,0.9,57.0,1.6,53.9,28.0,51.1,41.8,47.5,55.5,45.0,62.0,39.3,74.5,34.1,83.4,33.0,84.5,31.6,87.5,26.4,94.8,26.6,95.0,32.0,88.9,40.9,76.1,46.8,66.1,50.9,57.7,54.3,49.3,55.5,44.5,56.4,43.0,56.4,41.6,58.9,33.6,60.0,27.7,60.9,26.1,60.9,24.8,61.6,23.9,62.5,25.7,62.7,23.2,63.6,22.0,64.3,22.7,64.8,22.0,64.5,20.7,65.7,17.5,65.7,15.2,66.8,11.4,68.6,0.5,69.3,-1.1,69.1,-2.0,70.0,-3.6,63.0,-6.1,44.5,-10.9,29.8,-13.6,13.4,-15.5,10.7,-16.4,11.6,-18.6,15.9,-19.1,39.3,-18.4,50.5,-17.5,54.8,-16.6,56.6,-16.8,56.1,-17.7,56.6,-18.2,56.6,-21.4,56.1,-22.5,56.4,-24.5,55.7,-24.5,55.0,-25.2,55.0,-37.5,54.1,-43.6,51.4,-52.7,47.7,-59.5,47.5,-58.6,48.4,-56.4,50.0,-49.1,51.1,-38.6,50.9,-30.9,49.8,-23.6,49.3,-23.2,33.0,-23.2,24.8,-22.7,12.0,-20.9,10.9,-21.8,11.1,-22.3,10.7,-23.2,11.4,-24.1,16.8,-27.5,18.0,-27.7,19.8,-29.1,20.7,-29.1,22.3,-30.5,23.6,-30.5,26.8,-32.3,32.3,-34.1,35.2,-34.5,35.7,-36.1,36.4,-50.5,35.2,-64.8,34.3,-65.2,34.8,-65.7,34.5,-66.8,33.2,-67.3,33.0,-68.9,33.9,-70.2,33.4,-70.9,32.7,-70.2,32.3,-70.7,32.3,-72.5,31.6,-73.2,28.0,-84.5,25.0,-90.9,22.5,-95.0,22.3,-94.5,24.8,-88.2,24.8,-87.0,27.0,-79.8,29.3,-66.8,29.3,-51.6,27.7,-39.1,9.1,-25.5,7.7,-26.6,7.3,-28.0,10.5,-31.1,12.0,-33.4,9.5,-36.4,5.5,-40.0,4.8,-39.8,6.6,-36.6,7.0,-33.6,5.0,-31.1,3.6,-30.5,-3.4,-30.2,-5.7,-31.1,-7.3,-33.2,-7.0,-34.1,-8.2,-35.9,-4.5,-40.0,-5.2,-40.2,-7.0,-39.1,-12.0,-33.9,-12.0,-32.7,-7.7,-28.0,-8.0,-26.8,-8.9,-25.9,-10.7,-26.6,-27.0,-38.4,-28.0,-39.5,-29.5,-56.4,-29.5,-64.5,-28.4,-74.1,-28.9,-74.5,-29.3,-74.1,-29.3,-72.7,-29.8,-72.3,-30.5,-73.4],[-12.0,-3.0,-11.4,-2.5,-15.9,5.2,-15.7,10.2,-14.5,17.7,-13.0,21.1,-9.1,26.1,-5.7,29.3,-1.1,32.3,1.1,32.5,6.4,28.9,7.7,27.0,9.1,26.1,9.5,24.8,10.7,23.9,13.9,18.9,15.5,11.6,16.1,5.0,11.8,-2.5,12.3,-3.0,14.1,-1.6,19.5,4.1,19.1,18.0,18.4,22.5,13.0,30.7,8.0,35.5,0.7,40.9,-0.2,40.9,-2.7,39.3,-10.2,33.2,-15.2,27.5,-18.2,22.0,-19.1,13.0,-19.3,4.5,-18.9,3.6]];
+const SPIDER = EMBLEM.map(f => { const p = []; for (let i = 0; i < f.length; i += 2) p.push([f[i], f[i + 1]]); return p; });
+const emblemPath = (c, x, y, s) => { c.beginPath(); for (const p of SPIDER) { p.forEach((q, i) => c[i ? "lineTo" : "moveTo"](x + q[0] * s, y + q[1] * s)); c.closePath(); } };
+(function () {
+  const d = SPIDER.map(p => "M" + p.map(q => q[0].toFixed(1) + " " + q[1].toFixed(1)).join("L") + "Z").join("");
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200"><circle r="98" fill="#0b0b18"/><path transform="scale(.9)" fill="#ff3b46" fill-rule="evenodd" d="' + d + '"/></svg>';
+  const l = document.querySelector('link[rel="icon"]');
+  if (l) l.href = "data:image/svg+xml," + encodeURIComponent(svg);
+})();
+
+function drawSpider(c, x, y, s) {
+  emblemPath(c, x, y, s);
+  c.lineJoin = "round"; c.setLineDash([]);
+  const gr = c.createLinearGradient(x, y - 95 * s, x, y + 95 * s);
+  gr.addColorStop(0, "#ff4a55"); gr.addColorStop(1, "#b3121f");
+  c.fillStyle = gr; c.fill("evenodd");
+  c.strokeStyle = "rgba(255,170,170,.75)"; c.lineWidth = 1; c.stroke();
+}
+
+function drawWeb(c, x, y, R, n, rings, rot, vib, al) {
+  const TAU = Math.PI * 2;
+  c.setLineDash([]); c.lineWidth = 1; c.strokeStyle = "rgba(235,240,255," + al + ")"; c.beginPath();
+  for (let i = 0; i < n; i++) { const a = rot + i / n * TAU; c.moveTo(x, y); c.lineTo(x + Math.cos(a) * R, y + Math.sin(a) * R); }
+  for (let k = 1; k <= rings; k++) {
+    const r = R * k / rings;
+    for (let i = 0; i < n; i++) {
+      const a0 = rot + i / n * TAU, a1 = a0 + TAU / n, am = a0 + TAU / n / 2;
+      const rc = r * Math.cos(Math.PI / n) * (.9 + .05 * vib * Math.sin(t * 16 + i * 1.7 + k));
+      c.moveTo(x + Math.cos(a0) * r, y + Math.sin(a0) * r);
+      c.quadraticCurveTo(x + Math.cos(am) * rc, y + Math.sin(am) * rc, x + Math.cos(a1) * r, y + Math.sin(a1) * r);
+    }
+  }
+  c.stroke();
+}
+
+function drawReactor() {
+  energy += (STATES[state][2] - energy) * .05;
+  const x = W / 2, y = H / 2 - 6, R = Math.min(W, H) * .46, TAU = Math.PI * 2;
+  const vib = speaking ? 1 : state === "thinking" ? .8 : state === "listening" ? .6 : .12;
+  cx.clearRect(0, 0, W, H);
+  const g = cx.createRadialGradient(x, y, 0, x, y, R * .85);
+  g.addColorStop(0, "rgba(8,10,26,.92)");
+  g.addColorStop(.6, "rgba(79,134,255," + (.08 + .14 * energy) + ")");
+  g.addColorStop(1, "rgba(79,134,255,0)");
+  cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+  drawWeb(cx, x, y, R, 12, 6, t * .04, vib, .5);
+  const bl = (r, s, e, w, al, d) => { cx.beginPath(); cx.setLineDash(d || []); cx.lineWidth = w; cx.strokeStyle = "rgba(79,134,255," + al + ")"; cx.arc(x, y, r, s, e); cx.stroke(); cx.setLineDash([]); };
+  cx.setLineDash([]); cx.strokeStyle = "rgba(79,134,255,.7)";
+  for (let i = 0; i < 72; i++) {
+    const a = i / 72 * TAU - t * .15, l = i % 6 ? 6 : 12;
+    cx.lineWidth = i % 6 ? 1 : 2; cx.beginPath();
+    cx.moveTo(x + Math.cos(a) * (R + 4), y + Math.sin(a) * (R + 4));
+    cx.lineTo(x + Math.cos(a) * (R + 4 - l), y + Math.sin(a) * (R + 4 - l)); cx.stroke();
+  }
+  for (let k = 0; k < 3; k++) bl(R * .96, t * .6 + k * 2.09, t * .6 + k * 2.09 + 1.1, 3, .85);
+  bl(R * .9, -t * .4, -t * .4 + TAU, 2, .55, [3, 9]);
+  if (state === "thinking") {
+    cx.strokeStyle = "rgba(255,255,255,.85)"; cx.lineWidth = 2; cx.beginPath();
+    for (let i = 0; i < 14; i++) {
+      const a = i / 14 * TAU + t * .5, f = (Math.sin(t * 22 + i * 2.3) + 1) / 2, r0 = R * .7, r1 = r0 + R * (.05 + .12 * f);
+      cx.moveTo(x + Math.cos(a) * r0, y + Math.sin(a) * r0); cx.lineTo(x + Math.cos(a) * r1, y + Math.sin(a) * r1);
+    }
+    cx.stroke();
+  }
+  cx.shadowColor = "#ff3b46"; cx.shadowBlur = 16 + 14 * energy;
+  drawSpider(cx, x, y, R * .64 / 100 * (1 + .025 * Math.sin(t * 3) * energy));
+  cx.shadowBlur = 0;
+}
+
+(function frame() {
+  if (!RM) t += .016 * (1 + energy * 1.6);
+  drawBg(); drawReactor();
+  requestAnimationFrame(frame);
+})();
+
+/* ---------- boot sequence ---------- */
+const bootEl = $("#boot"), bootLog = $("#bootlog");
+const LINES = ["STARK INDUSTRIES // EDITH CORE", "NEURAL INTERFACE ... OK", "VOICE SYSTEMS ... READY", "PERSONAL ASSISTANT ... ONLINE", "EDITH ONLINE"];
+let bi = 0, bootDone = false;
+function finishBoot() {
+  if (bootDone) return; bootDone = true;
+  bootEl.classList.add("done");
+  const h = new Date().getHours(), p = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening";
+  addMsg("j", "EDITH", "Good " + p + ", " + HERO + ". EDITH online. How can I help?", true);
+  if (!apiKey) addMsg("j", "EDITH", "No API key linked yet, " + HERO + ". Tap API KEY and paste your Gemini key to begin.");
+}
+(function bootTick() {
+  if (bootDone) return;
+  if (bi < LINES.length) { bootLog.textContent += LINES[bi++] + "\n"; setTimeout(bootTick, RM ? 60 : 420); }
+  else setTimeout(finishBoot, RM ? 100 : 600);
+})();
+bootEl.onclick = finishBoot;
+</script>
+</body>
+</html>
