@@ -237,8 +237,8 @@ export default {
             },
             contents: turns,
             generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 2048
+           maxOutputTokens: 2048
+            }
             }
           })
         }
