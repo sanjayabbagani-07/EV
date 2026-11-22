@@ -1,0 +1,8 @@
+name = "ev-assistant-api"
+main = "index.js"
+compatibility_date = "2026-11-22"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGIN = "https://sanjayabbagani-07.github.io"
+
