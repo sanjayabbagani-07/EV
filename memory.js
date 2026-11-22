@@ -1,17 +1,16 @@
-/* EV explicit, device-local memory.
-   Memories are stored in this browser's localStorage and are not synced to a server. */
+/* EV explicit local memory. No cloud sync; data stays in this browser profile. */
 (function (global) {
   "use strict";
 
-  const KEY = "ev_memory_v1";
+  const KEY = "ev_memory_v2";
   const LIMIT = 100;
   const MAX_TEXT = 500;
 
   function read() {
     try {
-      const value = JSON.parse(localStorage.getItem(KEY) || "[]");
-      return Array.isArray(value)
-        ? value.filter(item => item && typeof item.text === "string").slice(-LIMIT)
+      const parsed = JSON.parse(localStorage.getItem(KEY) || "[]");
+      return Array.isArray(parsed)
+        ? parsed.filter(x => x && typeof x.text === "string").slice(-LIMIT)
         : [];
     } catch {
       return [];
@@ -19,74 +18,80 @@
   }
 
   function write(items) {
-    localStorage.setItem(KEY, JSON.stringify(items.slice(-LIMIT)));
+    try {
+      localStorage.setItem(KEY, JSON.stringify(items.slice(-LIMIT)));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  function remember(text) {
+  function remember(text, category) {
     const clean = String(text || "").trim().replace(/\s+/g, " ").slice(0, MAX_TEXT);
-    if (!clean) return "Tell me what you want me to remember.";
+    if (!clean) return { ok: false, message: "Tell EV what to remember." };
 
     const items = read();
-    if (items.some(item => item.text.toLowerCase() === clean.toLowerCase())) {
-      return "I already have that saved in this browser.";
+    if (items.some(x => x.text.toLowerCase() === clean.toLowerCase())) {
+      return { ok: true, duplicate: true, message: "That memory is already saved." };
     }
 
-    items.push({ text: clean, savedAt: new Date().toISOString() });
-    write(items);
-    return "Saved to EV memory on this device. I'll use it as context in future chats.";
+    items.push({
+      id: (global.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2),
+      text: clean,
+      category: String(category || "general").slice(0, 40),
+      createdAt: new Date().toISOString()
+    });
+
+    const ok = write(items);
+    return { ok, message: ok ? "Saved on this device." : "Could not save memory. Browser storage may be full or disabled." };
+  }
+
+  function recall(query) {
+    const q = String(query || "").trim().toLowerCase();
+    const items = read();
+    if (!q) return items;
+    return items.filter(x => x.text.toLowerCase().includes(q) || x.category.toLowerCase().includes(q));
   }
 
   function forget(query) {
-    const cleanQuery = String(query || "").trim().toLowerCase();
-
-    if (!cleanQuery || /^(all|everything|all memories)$/.test(cleanQuery)) {
-      write([]);
-      return "All EV memories saved on this device have been cleared.";
+    const q = String(query || "").trim().toLowerCase();
+    if (!q || q === "all") {
+      return { ok: write([]), removed: "all" };
     }
-
     const items = read();
-    const kept = items.filter(item => !item.text.toLowerCase().includes(cleanQuery));
-
-    if (kept.length === items.length) {
-      return "I couldn't find a saved memory matching that.";
-    }
-
-    write(kept);
-    return "Removed " + (items.length - kept.length) + " matching memory item(s).";
+    const kept = items.filter(x => !x.text.toLowerCase().includes(q) && !x.category.toLowerCase().includes(q));
+    const removed = items.length - kept.length;
+    return { ok: write(kept), removed };
   }
 
-  function handle(message) {
-    const text = String(message || "").trim();
-    let match = text.match(/^remember(?: that)?\s*[:,-]?\s*(.+)$/i);
-
-    if (match) {
-      return { reply: remember(match[1]), action: "remember" };
-    }
-
-    if (/^(what do you remember|what do you remember about me|recall memories|show my memories)$/i.test(text)) {
-      const items = read();
-      return {
-        reply: items.length
-          ? "Here's what I have saved on this device:\n" +
-            items.map((item, index) => (index + 1) + ". " + item.text).join("\n")
-          : "I don't have any saved memories on this device yet.",
-        action: "recall"
-      };
-    }
-
-    match = text.match(/^forget(?: that)?\s*[:,-]?\s*(.*)$/i);
-    if (match) {
-      return { reply: forget(match[1]), action: "forget" };
-    }
-
-    return null;
+  function exportData() {
+    return JSON.stringify(read(), null, 2);
   }
 
-  function context() {
-    return read()
-      .map((item, index) => (index + 1) + ". " + item.text)
-      .join("\n");
+  function importData(jsonText) {
+    let incoming;
+    try {
+      incoming = JSON.parse(jsonText);
+    } catch {
+      return { ok: false, message: "Invalid JSON file." };
+    }
+    if (!Array.isArray(incoming)) return { ok: false, message: "Memory backup must be a JSON array." };
+
+    const merged = read();
+    for (const item of incoming.slice(-LIMIT)) {
+      if (item && typeof item.text === "string" &&
+          !merged.some(x => x.text.toLowerCase() === item.text.toLowerCase())) {
+        merged.push({
+          id: String(item.id || Date.now() + Math.random()),
+          text: item.text.slice(0, MAX_TEXT),
+          category: String(item.category || "general").slice(0, 40),
+          createdAt: String(item.createdAt || new Date().toISOString())
+        });
+      }
+    }
+    const ok = write(merged);
+    return { ok, message: ok ? "Memory backup imported." : "Could not write imported memories." };
   }
 
-  global.EVMemory = Object.freeze({ handle, context });
+  global.EVMemory = Object.freeze({ remember, recall, forget, exportData, importData });
 })(window);

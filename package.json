@@ -1,0 +1,9 @@
+{
+  "name": "ev-personal-ai-upgrade",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/worker-smoke.mjs",
+    "check": "node --check Worker/index.js && node --check Worker/lib/agent.js && node --check frontend/ev-worker-client.js && node --check memory.js"
+  }
+}
